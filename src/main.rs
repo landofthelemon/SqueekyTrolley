@@ -31,18 +31,21 @@ impl Product {
     }
 }
 
-fn read_file() {
+fn read_file() -> Vec<Product> {
+    let mut product_list = Vec::<Product>::new();
     let mut reader = match Reader::from_path("data/products.csv") {
         Ok(x) => x,
         Err(x) => panic!("Cannot read the input file")
     };
     for result in reader.deserialize::<Product>() {
         let record = match result {
-            Ok(x) => println!("{} {}/{}", x.name, x.stock_level, x.max_stock),
+            Ok(x) => x,
             Err(x) => panic!("{:?}", x)
         };
+        product_list.push(record);
     }
     println!("Finished reading the file");
+    product_list
 }
 
 #[derive(Serialize)]
@@ -76,7 +79,9 @@ async fn index(global_storage: web::Data<Arc<Mutex<ProgramState>>>) -> impl Resp
 #[actix_rt::main]
 async fn main() -> io::Result<()> {
     //add some global storage here
-    let product_list = ProgramState::new();
+    let mut product_list = ProgramState::new();
+    let mut current_product_list = read_file();
+    product_list.list.append(&mut current_product_list);
     let global_storage = Arc::new(Mutex::new(product_list));
     HttpServer::new(move || 
         App::new()
