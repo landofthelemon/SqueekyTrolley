@@ -5,7 +5,25 @@ function load() {
     })
     .then(data => {
       render_table(data.list);
+      start_web_socket();
     });
+}
+
+function start_web_socket() {
+    if (!window.WebSocket) {
+        throw "Browser doesn't support websockets";
+    }
+    var ws = new WebSocket("ws://localhost:8080/ws");	
+    ws.onopen = function() {
+       console.log("Connection is open...");
+    };
+    ws.onmessage = function (evt) { 
+       var data = JSON.parse(evt.data);
+       render_table(data.list);
+    };
+    ws.onclose = function() { 
+       console.log("Connection is closed..."); 
+    };
 }
 
 function render_table(products) {
@@ -13,6 +31,9 @@ function render_table(products) {
   if (!tbody) {
     throw "Cannot find table";
   }
+  while (tbody.firstChild) {
+    tbody.removeChild(tbody.firstChild);
+}
   for (let i = 0; i < products.length; i++) {
     const product = products[i];
     const row = document.createElement("tr");
