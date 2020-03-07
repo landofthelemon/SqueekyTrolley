@@ -11,7 +11,7 @@ use actix::prelude::*;
 
 use csv::Reader;
 use serde::{Deserialize};
-use actix_web::{get, web, App, Error, HttpRequest, HttpResponse, HttpServer, Responder};
+use actix_web::{get, web, App, Error, middleware, HttpRequest, HttpResponse, HttpServer, Responder};
 use std::sync::{Arc, Mutex};
 use std::io;
 use actix_files as fs;
@@ -40,7 +40,7 @@ fn read_file() -> Vec<Product> {
     let mut product_list = Vec::<Product>::new();
     let mut reader = match Reader::from_path("data/products.csv") {
         Ok(x) => x,
-        Err(x) => panic!("Cannot read the input file")
+        Err(_x) => panic!("Cannot read the input file")
     };
     for result in reader.deserialize::<Product>() {
         let record = match result {
@@ -53,30 +53,45 @@ fn read_file() -> Vec<Product> {
     product_list
 }
 
+#[derive(Deserialize, Debug)]
+struct TableQuery {
+    page_size: Option<usize>,
+    page_index: Option<usize>
+}
+
 #[derive(Serialize)]
 pub struct ProgramState {
-    pub list: Vec<Product>
+    pub products: Vec<Product>
 }
 
 impl ProgramState {
     pub fn new() -> ProgramState {
         ProgramState {
-            list: Vec::new()
+            products: Vec::new()
         }
     }
 }
 #[get("/api/v1/products/add")]
-async fn add(global_storage: web::Data<Arc<Mutex<ProgramState>>>) -> impl Responder {
+async fn add_product(global_storage: web::Data<Arc<Mutex<ProgramState>>>) -> impl Responder {
     let program_state = &mut global_storage.lock().unwrap();
-    program_state.list.push(Product::new(String::from("Cheese"), 10, 20));
-    let text = format!("{} products", program_state.list.len());
+    program_state.products.push(Product::new(String::from("Cheese"), 10, 20));
+    let text = format!("{} products", program_state.products.len());
     HttpResponse::Ok().body(text)
 }
 
 #[get("/api/v1/products")]
-async fn index(global_storage: web::Data<Arc<Mutex<ProgramState>>>) -> impl Responder {
+async fn list_products(global_storage: web::Data<Arc<Mutex<ProgramState>>>, table_query: web::Query<TableQuery>) -> impl Responder {
     let program_state = &*global_storage.lock().unwrap();
-    HttpResponse::Ok().json(program_state)
+    let page_size = match table_query.0.page_size {
+        Some(x) => x,
+        None => 10
+    };
+    let page_index = match table_query.0.page_index {
+        Some(x) => x,
+        None => 0
+    };
+    let products = &program_state.products;
+    HttpResponse::Ok().json(products.into_iter().skip(page_index*page_size).take(page_size).collect::<Vec<&Product>>())
 }
 
 #[actix_rt::main]
@@ -84,13 +99,14 @@ async fn main() -> io::Result<()> {
     //add some global storage here
     let mut product_list = ProgramState::new();
     let mut current_product_list = read_file();
-    product_list.list.append(&mut current_product_list);
+    product_list.products.append(&mut current_product_list);
     let global_storage = Arc::new(Mutex::new(product_list));
     HttpServer::new(move || 
         App::new()
             .data(global_storage.clone()) // add shared state
-            .service(index)
-            .service(add)
+            .wrap(middleware::Compress::default()) // compresses the output
+            .service(list_products) 
+            .service(add_product)
             .service(web::resource("/ws").route(web::get().to(ws_index)))
             .service(fs::Files::new("/", "./static/")
             .index_file("index.html"))

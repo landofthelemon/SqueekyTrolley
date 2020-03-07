@@ -1,13 +1,61 @@
 function load() {
-  fetch("http://127.0.0.1:8080/api/v1/products")
+    const page_size_input = document.getElementById("page_size");
+    const page_index_input = document.getElementById("page_index");
+    page_size_input.onchange = function() {
+        read_values_and_update();
+    }
+    page_index_input.onchange = function() {
+        read_values_and_update();
+    }
+    document.getElementById("previous").onclick = function() {
+        const page_index_input = document.getElementById("page_index");
+        page_index_input.value--;
+        read_values_and_update();
+    }
+    document.getElementById("next").onclick = function() {
+        const page_index_input = document.getElementById("page_index");
+        page_index_input.value++;
+        read_values_and_update();
+    }
+    read_values_and_update();
+}
+
+function read_values_and_update() {
+    const page_size_input = document.getElementById("page_size");
+    const page_index_input = document.getElementById("page_index");
+    update_table(page_size_input.value, page_index_input.value);
+}
+
+function update_table(page_size, page_index) {
+    fetch("http://127.0.0.1:8080/api/v1/products?page_size={page_size}&page_index={page_index}".format({page_size:page_size, page_index:page_index}))
     .then(response => {
       return response.json();
     })
     .then(data => {
-      render_table(data.list);
-      start_web_socket();
+      render_table(data);
+      //start_web_socket();
     });
 }
+
+//Taken from https://stackoverflow.com/questions/610406/javascript-equivalent-to-printf-string-format
+String.prototype.format = String.prototype.format ||
+function () {
+    "use strict";
+    var str = this.toString();
+    if (arguments.length) {
+        var t = typeof arguments[0];
+        var key;
+        var args = ("string" === t || "number" === t) ?
+            Array.prototype.slice.call(arguments)
+            : arguments[0];
+
+        for (key in args) {
+            str = str.replace(new RegExp("\\{" + key + "\\}", "gi"), args[key]);
+        }
+    }
+
+    return str;
+};
 
 function start_web_socket() {
     if (!window.WebSocket) {
@@ -19,7 +67,7 @@ function start_web_socket() {
     };
     ws.onmessage = function (evt) { 
        var data = JSON.parse(evt.data);
-       render_table(data.list);
+       render_table(data);
     };
     ws.onclose = function() { 
        console.log("Connection is closed..."); 

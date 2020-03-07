@@ -5,6 +5,17 @@
         <script src="index.js"></script>
     </head>
     <body>
+        <header>
+            <label>Page Size</label>
+            <select id="page_size">
+                <option value="5">5</option>
+                <option value="10" selected>10</option>
+                <option value="20">20</option>
+                <option value="50">50</option>
+            </select>
+            <label>Page Index</label>
+            <input type="number" min="0" value="0" id="page_index"/>
+        </header>
         <table id="table" border="1">
             <thead>
                 <th>Name</th>
@@ -15,6 +26,10 @@
                 
             </tbody>
         </table>
+        <footer>
+            <button id="previous">Previous Page</button>
+            <button id="next">Next Page</button>
+        </footer>
         <script>
             document.addEventListener("DOMContentLoaded", load);
         </script>
