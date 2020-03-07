@@ -11,6 +11,7 @@ use serde::{Deserialize};
 use actix_web::{get, web, App, HttpServer, HttpResponse, Responder};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::io;
+use actix_files as fs;
 
 
 #[derive(Debug, Deserialize, Serialize, Eq, PartialEq)]
@@ -71,10 +72,8 @@ async fn add(global_storage: web::Data<Arc<Mutex<ProgramState>>>) -> impl Respon
 #[get("/api/v1/products")]
 async fn index(global_storage: web::Data<Arc<Mutex<ProgramState>>>) -> impl Responder {
     let program_state = &*global_storage.lock().unwrap();
-    let json = serde_json::to_string(&program_state).unwrap();
-    HttpResponse::Ok().body(json)
+    HttpResponse::Ok().json(program_state)
 }
-
 
 #[actix_rt::main]
 async fn main() -> io::Result<()> {
@@ -87,7 +86,10 @@ async fn main() -> io::Result<()> {
         App::new()
             .data(global_storage.clone()) // add shared state
             .service(index)
-            .service(add))
+            .service(add)
+            .service(fs::Files::new("/", "./static/")
+            .index_file("index.html"))
+        )
         .bind("127.0.0.1:8080")?
         .run()
         .await
