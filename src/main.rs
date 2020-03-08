@@ -4,24 +4,34 @@ extern crate serde;
 extern crate serde_json;
 extern crate chrono;
 
-use chrono::{NaiveDateTime, Utc, NaiveTime};
-
-
-#[macro_use]
+use chrono::{NaiveDateTime, Utc};
 use serde::{Serialize};
 
 use std::time::{Duration, Instant};
 use actix::prelude::*;
 use uuid::Uuid;
 
-use csv::{Reader, ReaderBuilder};
+use csv::{ReaderBuilder};
 use serde::{Deserialize};
-use actix_web::{get, web, App, Error, middleware, HttpRequest, HttpResponse, HttpServer, Responder};
+use actix_web::{post, get, web, App, Error, middleware, HttpRequest, HttpResponse, HttpServer, Responder, http::StatusCode};
 use std::sync::{Arc, Mutex};
 use std::io;
 use actix_files as fs;
 use actix_web_actors::ws;
 use std::clone::Clone;
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct UpdatedProduct {
+    pub name: Option<String>,
+    pub price: Option<f64>, //Price should managed as an integer to avoid floating point errors
+    pub barcode: Option<String>,
+    pub department: Option<String>,
+    pub supplier: Option<String>,
+    #[serde(rename = "current_stock")]
+    pub stock_level: Option<i64>,
+    pub max_stock: Option<i64>,
+    pub version: Option<i64>
+}
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct NewProduct {
@@ -49,7 +59,8 @@ pub struct Product {
     pub deleted: bool,
     #[serde(rename = "current_stock")]
     pub stock_level: i64,
-    pub max_stock: i64
+    pub max_stock: i64,
+    pub version: i64,
 }
 
 impl Product {
@@ -66,11 +77,48 @@ impl Product {
             updated: NaiveDateTime::from_timestamp(Utc::now().timestamp(), 0),
             deleted: false,
             stock_level: stock_level,
-            max_stock: max_stock
+            max_stock: max_stock,
+            version: 0
         }
     }
     pub fn from_new_product(new_product: NewProduct) -> Product {
         Product::new(new_product.name, (new_product.price/100.0) as i64, new_product.barcode, new_product.department, new_product.supplier, new_product.stock_level, new_product.max_stock)
+    }
+    pub fn update_product(&mut self, updated_product: UpdatedProduct) -> Result<Vec<String>, &'static str> {
+        let version = match updated_product.version {
+            Some(version) => version,
+            None => return Err("Version not specified")
+        };
+        if version != self.version {
+            return Err("Out of date");
+        }
+        let mut updated_fields: Vec<String> = Vec::new();
+        match updated_product.name {
+            Some(name) => {
+                self.name = name;
+                updated_fields.push(String::from("name"));
+            },
+            None => {}
+        };
+        match updated_product.price {
+            Some(price) => {
+                self.price = (price / 100.00) as i64;
+                updated_fields.push(String::from("price"));
+            },
+            None => {}
+        };
+        match updated_product.supplier {
+            Some(supplier) => {
+                self.supplier = supplier;
+                updated_fields.push(String::from("price"));
+            },
+            None => {}
+        };
+        if updated_fields.len() == 0 {
+            return Err("No fields to update");
+        }
+        self.version += 1;
+        Ok(updated_fields)
     }
 }
 
@@ -109,6 +157,43 @@ impl ProgramState {
         }
     }
 }
+
+#[derive(Serialize)]
+struct CustomResponse {
+    reason: String,
+}
+
+impl CustomResponse {
+    pub fn new(message: String) -> CustomResponse {
+        Self {
+            reason: message
+        }
+    }
+}
+
+#[derive(Deserialize, Debug)]
+struct IdQuery {
+    id: String
+}
+
+#[post("/api/v1/products/{id}")]
+async fn update_product(global_storage: web::Data<Arc<Mutex<ProgramState>>>, updated_product: web::Json<UpdatedProduct>, path_params: web::Path<IdQuery>) -> impl Responder {
+    let program_state = &mut global_storage.lock().unwrap();
+    let products = &mut program_state.products;
+    for product in products.into_iter() {
+        if product.id != path_params.id {
+            continue;
+        }
+        let updated_fields = match product.update_product(updated_product.0) {
+            Ok(x) => (*x).to_vec(),
+            Err(x) => return HttpResponse::Ok().json(CustomResponse::new(String::from(x)))
+        };
+        println!("{:?}", updated_fields);
+        return HttpResponse::Ok().json(product);
+    };
+    HttpResponse::Ok().json(CustomResponse::new(String::from("Product not found")))
+}
+
 #[get("/api/v1/products/add")]
 async fn add_product(global_storage: web::Data<Arc<Mutex<ProgramState>>>, new_product: web::Json<NewProduct>) -> impl Responder {
     let program_state = &mut global_storage.lock().unwrap();
@@ -145,6 +230,7 @@ async fn main() -> io::Result<()> {
             .wrap(middleware::Compress::default()) // compresses the output
             .service(list_products) 
             .service(add_product)
+            .service(update_product)
             .service(web::resource("/ws").route(web::get().to(ws_index)))
             .service(fs::Files::new("/", "./static/")
             .index_file("index.html"))
