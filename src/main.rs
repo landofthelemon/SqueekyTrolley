@@ -2,52 +2,90 @@ extern crate csv;
 extern crate actix_web;
 extern crate serde;
 extern crate serde_json;
+extern crate chrono;
+
+use chrono::{NaiveDateTime, Utc, NaiveTime};
+
 
 #[macro_use]
 use serde::{Serialize};
 
 use std::time::{Duration, Instant};
 use actix::prelude::*;
+use uuid::Uuid;
 
-use csv::Reader;
+use csv::{Reader, ReaderBuilder};
 use serde::{Deserialize};
 use actix_web::{get, web, App, Error, middleware, HttpRequest, HttpResponse, HttpServer, Responder};
 use std::sync::{Arc, Mutex};
 use std::io;
 use actix_files as fs;
 use actix_web_actors::ws;
+use std::clone::Clone;
 
-
-#[derive(Debug, Deserialize, Serialize, Eq, PartialEq)]
-pub struct Product {
+#[derive(Debug, Deserialize, Serialize)]
+pub struct NewProduct {
     pub name: String,
+    pub price: f64, //Price should managed as an integer to avoid floating point errors
+    pub barcode: String,
+    pub department: String,
+    pub supplier: String,
+    #[serde(rename = "current_stock")]
+    pub stock_level: i64,
+    pub max_stock: i64
+}
+
+#[derive(Debug, Deserialize, Serialize, Eq, PartialEq, Clone)]
+pub struct Product {
+    pub id: String, //if the product is new it won't have an ID
+    pub name: String,
+    pub price: i64, //Price is managed as an integer to avoid floating point errors
+    pub barcode: String,
+    pub department: String,
+    pub supplier: String,
+    pub label_printed: Option<bool>,
+    pub created: NaiveDateTime,
+    pub updated: NaiveDateTime,
+    pub deleted: bool,
     #[serde(rename = "current_stock")]
     pub stock_level: i64,
     pub max_stock: i64
 }
 
 impl Product {
-    pub fn new(name: String, stock_level: i64, max_stock: i64) -> Product {
+    pub fn new(name: String, price: i64, barcode: String, department: String, supplier: String, stock_level: i64, max_stock: i64) -> Product {
         Product {
+            id: Uuid::new_v4().to_string(),
             name: name,
+            price: price,
+            barcode: barcode,
+            department: department,
+            supplier: supplier,
+            label_printed: Some(false),
+            created: NaiveDateTime::from_timestamp(Utc::now().timestamp(), 0),
+            updated: NaiveDateTime::from_timestamp(Utc::now().timestamp(), 0),
+            deleted: false,
             stock_level: stock_level,
             max_stock: max_stock
         }
+    }
+    pub fn from_new_product(new_product: NewProduct) -> Product {
+        Product::new(new_product.name, (new_product.price/100.0) as i64, new_product.barcode, new_product.department, new_product.supplier, new_product.stock_level, new_product.max_stock)
     }
 }
 
 fn read_file() -> Vec<Product> {
     let mut product_list = Vec::<Product>::new();
-    let mut reader = match Reader::from_path("data/products.csv") {
+    let mut reader = match ReaderBuilder::new().has_headers(true).from_path("data/products.csv") {
         Ok(x) => x,
         Err(_x) => panic!("Cannot read the input file")
     };
-    for result in reader.deserialize::<Product>() {
+    for result in reader.deserialize::<NewProduct>() {
         let record = match result {
             Ok(x) => x,
             Err(x) => panic!("{:?}", x)
         };
-        product_list.push(record);
+        product_list.push(Product::from_new_product(record));
     }
     println!("Finished reading the file");
     product_list
@@ -72,11 +110,11 @@ impl ProgramState {
     }
 }
 #[get("/api/v1/products/add")]
-async fn add_product(global_storage: web::Data<Arc<Mutex<ProgramState>>>) -> impl Responder {
+async fn add_product(global_storage: web::Data<Arc<Mutex<ProgramState>>>, new_product: web::Json<NewProduct>) -> impl Responder {
     let program_state = &mut global_storage.lock().unwrap();
-    program_state.products.push(Product::new(String::from("Cheese"), 10, 20));
-    let text = format!("{} products", program_state.products.len());
-    HttpResponse::Ok().body(text)
+    let product = Product::from_new_product(new_product.0);
+    program_state.products.push(product.clone());
+    HttpResponse::Ok().json(product)
 }
 
 #[get("/api/v1/products")]
