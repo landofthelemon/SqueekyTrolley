@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 use csv::{ReaderBuilder};
 use serde::{Deserialize};
-use actix_web::{post, get, web, App, Error, middleware, HttpRequest, HttpResponse, HttpServer, Responder, http::StatusCode};
+use actix_web::{post, get, put, web, App, Error, middleware, HttpRequest, HttpResponse, HttpServer, Responder, http::StatusCode};
 use std::sync::{Arc, Mutex};
 use std::io;
 use actix_files as fs;
@@ -194,6 +194,49 @@ async fn update_product(global_storage: web::Data<Arc<Mutex<ProgramState>>>, upd
     HttpResponse::Ok().json(CustomResponse::new(String::from("Product not found")))
 }
 
+#[put("/api/v1/products/{id}/increment")]
+async fn increment_product(global_storage: web::Data<Arc<Mutex<ProgramState>>>, updated_product: web::Json<UpdatedProduct>, path_params: web::Path<IdQuery>) -> impl Responder {
+    let program_state = &mut global_storage.lock().unwrap();
+    let products = &mut program_state.products;
+    for product in products.into_iter() {
+        if product.id != path_params.id {
+            continue;
+        }
+        product.stock_level += 1;
+        product.version += 1;
+        return HttpResponse::Ok().json(product);
+    };
+    HttpResponse::Ok().json(CustomResponse::new(String::from("Product not found")))
+}
+
+#[put("/api/v1/products/{id}/decrement")]
+async fn decrement_product(global_storage: web::Data<Arc<Mutex<ProgramState>>>, updated_product: web::Json<UpdatedProduct>, path_params: web::Path<IdQuery>) -> impl Responder {
+    let program_state = &mut global_storage.lock().unwrap();
+    let products = &mut program_state.products;
+    for product in products.into_iter() {
+        if product.id != path_params.id {
+            continue;
+        }
+        product.stock_level -= 1;
+        product.version -= 1;
+        return HttpResponse::Ok().json(product);
+    };
+    HttpResponse::Ok().json(CustomResponse::new(String::from("Product not found")))
+}
+
+#[get("/api/v1/products/{id}")]
+async fn find_product_by_id(global_storage: web::Data<Arc<Mutex<ProgramState>>>, updated_product: web::Json<UpdatedProduct>, path_params: web::Path<IdQuery>) -> impl Responder {
+    let program_state = &mut global_storage.lock().unwrap();
+    let products = &mut program_state.products;
+    for product in products.into_iter() {
+        if product.id != path_params.id {
+            continue;
+        }
+        return HttpResponse::Ok().json(product);
+    };
+    HttpResponse::Ok().json(CustomResponse::new(String::from("Product not found")))
+}
+
 #[get("/api/v1/products/add")]
 async fn add_product(global_storage: web::Data<Arc<Mutex<ProgramState>>>, new_product: web::Json<NewProduct>) -> impl Responder {
     let program_state = &mut global_storage.lock().unwrap();
@@ -231,6 +274,9 @@ async fn main() -> io::Result<()> {
             .service(list_products) 
             .service(add_product)
             .service(update_product)
+            .service(find_product_by_id)
+            .service(increment_product)
+            .service(decrement_product)
             .service(web::resource("/ws").route(web::get().to(ws_index)))
             .service(fs::Files::new("/", "./static/")
             .index_file("index.html"))
