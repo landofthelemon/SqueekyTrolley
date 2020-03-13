@@ -11,6 +11,9 @@ use std::time::{Duration, Instant};
 use actix::prelude::*;
 use uuid::Uuid;
 
+use fst::{IntoStreamer, Set};
+use fst::automaton::Levenshtein;
+
 use csv::{ReaderBuilder};
 use serde::{Deserialize};
 use actix_web::{post, get, put, web, App, Error, middleware, HttpRequest, HttpResponse, HttpServer, Responder, http::StatusCode};
@@ -114,6 +117,20 @@ impl Product {
             },
             None => {}
         };
+        match updated_product.max_stock {
+            Some(max_stock) => {
+                self.max_stock = max_stock;
+                updated_fields.push(String::from("max_stock"));
+            },
+            None => {}
+        };
+        match updated_product.stock_level {
+            Some(stock_level) => {
+                self.stock_level = stock_level;
+                updated_fields.push(String::from("stock_level"));
+            },
+            None => {}
+        };
         if updated_fields.len() == 0 {
             return Err("No fields to update");
         }
@@ -176,6 +193,11 @@ struct IdQuery {
     id: String
 }
 
+#[derive(Deserialize, Debug)]
+struct SearchQuery {
+    search: String
+}
+
 #[post("/api/v1/products/{id}")]
 async fn update_product(global_storage: web::Data<Arc<Mutex<ProgramState>>>, updated_product: web::Json<UpdatedProduct>, path_params: web::Path<IdQuery>) -> impl Responder {
     let program_state = &mut global_storage.lock().unwrap();
@@ -209,6 +231,39 @@ async fn increment_product(global_storage: web::Data<Arc<Mutex<ProgramState>>>, 
     HttpResponse::Ok().json(CustomResponse::new(String::from("Product not found")))
 }
 
+#[get("/api/v1/products/search/{search}")]
+async fn search_for_products(global_storage: web::Data<Arc<Mutex<ProgramState>>>, path_params: web::Path<SearchQuery>) -> impl Responder {
+    let program_state = &mut global_storage.lock().unwrap();
+    let products = &mut program_state.products;
+
+    let mut keys = Vec::<&[u8]>::new();
+    for product in products.into_iter().take(10) {
+        keys.push(product.name.as_bytes());
+    }
+    let set = match Set::from_iter(keys) {
+        Ok(x) => x,
+        Err(x) => {
+            panic!(x);
+            //return HttpResponse::Ok().json(CustomResponse::new(String::from("failure 1")))
+        }
+    };
+    
+
+    // Build our fuzzy query.
+    let lev = match Levenshtein::new(&path_params.search, 1) {
+        Ok(x) => x,
+        Err(x) => return HttpResponse::Ok().json(CustomResponse::new(String::from("failure 2")))
+    };
+
+    // Apply our fuzzy query to the set we built.
+    let stream = set.search(lev).into_stream();
+    let found_product_names = match stream.into_strs() {
+        Ok(x) => x,
+        Err(x) => return HttpResponse::Ok().json(CustomResponse::new(String::from("failure 3")))
+    };
+    HttpResponse::Ok().json(found_product_names)
+}
+
 #[put("/api/v1/products/{id}/decrement")]
 async fn decrement_product(global_storage: web::Data<Arc<Mutex<ProgramState>>>, updated_product: web::Json<UpdatedProduct>, path_params: web::Path<IdQuery>) -> impl Responder {
     let program_state = &mut global_storage.lock().unwrap();
@@ -218,7 +273,7 @@ async fn decrement_product(global_storage: web::Data<Arc<Mutex<ProgramState>>>, 
             continue;
         }
         product.stock_level -= 1;
-        product.version -= 1;
+        product.version += 1;
         return HttpResponse::Ok().json(product);
     };
     HttpResponse::Ok().json(CustomResponse::new(String::from("Product not found")))
@@ -277,6 +332,7 @@ async fn main() -> io::Result<()> {
             .service(find_product_by_id)
             .service(increment_product)
             .service(decrement_product)
+            .service(search_for_products)
             .service(web::resource("/ws").route(web::get().to(ws_index)))
             .service(fs::Files::new("/", "./static/")
             .index_file("index.html"))
