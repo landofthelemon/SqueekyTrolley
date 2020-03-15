@@ -16,4 +16,3 @@ actix-files = "0.2.1" # for static files
 actix-web-actors = "2.0.0" # for web sockets
 uuid = { version = "0.8", features = ["serde", "v4"] } # for ID's
 chrono = { version = "0.4", features = ["serde"] }
-fst = { version = "0.4.0", features = ["levenshtein"] } # for fuzzy search

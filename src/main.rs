@@ -11,17 +11,16 @@ use std::time::{Duration, Instant};
 use actix::prelude::*;
 use uuid::Uuid;
 
-use fst::{IntoStreamer, Set};
-use fst::automaton::Levenshtein;
-
 use csv::{ReaderBuilder};
 use serde::{Deserialize};
-use actix_web::{post, get, put, web, App, Error, middleware, HttpRequest, HttpResponse, HttpServer, Responder, http::StatusCode};
+use actix_web::{post, get, put, web, App, Error, middleware, HttpRequest, HttpResponse, HttpServer, Responder};
 use std::sync::{Arc, Mutex};
 use std::io;
 use actix_files as fs;
 use actix_web_actors::ws;
 use std::clone::Clone;
+
+use std::cmp;
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct UpdatedProduct {
@@ -217,7 +216,7 @@ async fn update_product(global_storage: web::Data<Arc<Mutex<ProgramState>>>, upd
 }
 
 #[put("/api/v1/products/{id}/increment")]
-async fn increment_product(global_storage: web::Data<Arc<Mutex<ProgramState>>>, updated_product: web::Json<UpdatedProduct>, path_params: web::Path<IdQuery>) -> impl Responder {
+async fn increment_product(global_storage: web::Data<Arc<Mutex<ProgramState>>>, path_params: web::Path<IdQuery>) -> impl Responder {
     let program_state = &mut global_storage.lock().unwrap();
     let products = &mut program_state.products;
     for product in products.into_iter() {
@@ -231,41 +230,81 @@ async fn increment_product(global_storage: web::Data<Arc<Mutex<ProgramState>>>, 
     HttpResponse::Ok().json(CustomResponse::new(String::from("Product not found")))
 }
 
+#[derive(Serialize, Eq, Ord, PartialEq, PartialOrd)]
+pub struct LevenshteinDistance {
+    id: String,
+    name: String,
+    distance: usize
+}
+
+impl LevenshteinDistance {
+    pub fn new(id: String, name: String, distance:usize) -> LevenshteinDistance {
+        LevenshteinDistance {
+            id: id,
+            name: name,
+            distance: distance
+        }
+    }
+    pub fn calculate(str1: &String, str2: &String) -> usize {
+        if str1 == str2 {
+            return 0;
+        }
+
+        let n = str1.len();
+        let m = str2.len();
+
+        let mut column: Vec<usize> = (0..n + 1).collect();
+        // TODO this probaly needs to use graphemes
+        let a_vec: Vec<char> = str1.chars().collect();
+        let b_vec: Vec<char> = str2.chars().collect();
+        for i in 1..m + 1 {
+            let previous = column;
+            column = vec![0; n + 1];
+            column[0] = i;
+            for j in 1..n + 1 {
+                let add = previous[j] + 1;
+                let delete = column[j - 1] + 1;
+                let mut change = previous[j - 1];
+                if a_vec[j - 1] != b_vec[i - 1] {
+                    change += 2;
+                }
+                else if change > 0 {
+                    change -= 1;
+                }
+                column[j] = cmp::min(add, cmp::min(delete, change));
+            }
+        }
+        column[n]
+    }
+}
+
 #[get("/api/v1/products/search/{search}")]
 async fn search_for_products(global_storage: web::Data<Arc<Mutex<ProgramState>>>, path_params: web::Path<SearchQuery>) -> impl Responder {
     let program_state = &mut global_storage.lock().unwrap();
     let products = &mut program_state.products;
-
-    let mut keys = Vec::<&[u8]>::new();
-    for product in products.into_iter().take(10) {
-        keys.push(product.name.as_bytes());
-    }
-    let set = match Set::from_iter(keys) {
-        Ok(x) => x,
-        Err(x) => {
-            panic!(x);
-            //return HttpResponse::Ok().json(CustomResponse::new(String::from("failure 1")))
+    let mut results: Vec<LevenshteinDistance> = Vec::new();
+    let search_term = &path_params.search.to_lowercase();
+    for product in products.into_iter() {
+        let product_name = &product.name.to_lowercase();
+        if search_term == product_name {
+            results.push(LevenshteinDistance::new(product.id.clone(), product.name.clone(), 0));
+            continue;
         }
-    };
-    
-
-    // Build our fuzzy query.
-    let lev = match Levenshtein::new(&path_params.search, 1) {
-        Ok(x) => x,
-        Err(x) => return HttpResponse::Ok().json(CustomResponse::new(String::from("failure 2")))
-    };
-
-    // Apply our fuzzy query to the set we built.
-    let stream = set.search(lev).into_stream();
-    let found_product_names = match stream.into_strs() {
-        Ok(x) => x,
-        Err(x) => return HttpResponse::Ok().json(CustomResponse::new(String::from("failure 3")))
-    };
-    HttpResponse::Ok().json(found_product_names)
+        if product_name.starts_with(search_term) {
+            results.push(LevenshteinDistance::new(product.id.clone(), product.name.clone(), 0));
+            continue;
+        }
+        let distance = LevenshteinDistance::calculate(search_term, product_name);
+        if distance <= 10 {
+            results.push(LevenshteinDistance::new(product.id.clone(), product.name.clone(), distance));
+        }
+    }
+    results.sort_by(|a, b| a.distance.cmp(&b.distance));
+    HttpResponse::Ok().json(results.into_iter().take(10).collect::<Vec<LevenshteinDistance>>())
 }
 
 #[put("/api/v1/products/{id}/decrement")]
-async fn decrement_product(global_storage: web::Data<Arc<Mutex<ProgramState>>>, updated_product: web::Json<UpdatedProduct>, path_params: web::Path<IdQuery>) -> impl Responder {
+async fn decrement_product(global_storage: web::Data<Arc<Mutex<ProgramState>>>, path_params: web::Path<IdQuery>) -> impl Responder {
     let program_state = &mut global_storage.lock().unwrap();
     let products = &mut program_state.products;
     for product in products.into_iter() {
@@ -280,7 +319,7 @@ async fn decrement_product(global_storage: web::Data<Arc<Mutex<ProgramState>>>, 
 }
 
 #[get("/api/v1/products/{id}")]
-async fn find_product_by_id(global_storage: web::Data<Arc<Mutex<ProgramState>>>, updated_product: web::Json<UpdatedProduct>, path_params: web::Path<IdQuery>) -> impl Responder {
+async fn find_product_by_id(global_storage: web::Data<Arc<Mutex<ProgramState>>>, path_params: web::Path<IdQuery>) -> impl Responder {
     let program_state = &mut global_storage.lock().unwrap();
     let products = &mut program_state.products;
     for product in products.into_iter() {
