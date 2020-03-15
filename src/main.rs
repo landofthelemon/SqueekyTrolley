@@ -86,7 +86,14 @@ impl Product {
     pub fn from_new_product(new_product: NewProduct) -> Product {
         Product::new(new_product.name, (new_product.price/100.0) as i64, new_product.barcode, new_product.department, new_product.supplier, new_product.stock_level, new_product.max_stock)
     }
+    pub fn delete(&mut self) {
+        self.deleted = true;
+        self.version += 1;
+    }
     pub fn update_product(&mut self, updated_product: UpdatedProduct) -> Result<Vec<String>, &'static str> {
+        if (self.deleted) {
+            return Err("Product deleted");
+        }
         let version = match updated_product.version {
             Some(version) => version,
             None => return Err("Version not specified")
@@ -331,6 +338,20 @@ async fn find_product_by_id(global_storage: web::Data<Arc<Mutex<ProgramState>>>,
     HttpResponse::Ok().json(CustomResponse::new(String::from("Product not found")))
 }
 
+#[delete("/api/v1/products/{id}")]
+async fn delete_product_by_id(global_storage: web::Data<Arc<Mutex<ProgramState>>>, path_params: web::Path<IdQuery>) -> impl Responder {
+    let program_state = &mut global_storage.lock().unwrap();
+    let products = &mut program_state.products;
+    for product in products.into_iter() {
+        if product.id != path_params.id {
+            continue;
+        }
+        product.delete();
+        return HttpResponse::Ok().json(product);
+    };
+    HttpResponse::Ok().json(CustomResponse::new(String::from("Product not found")))
+}
+
 #[get("/api/v1/products/add")]
 async fn add_product(global_storage: web::Data<Arc<Mutex<ProgramState>>>, new_product: web::Json<NewProduct>) -> impl Responder {
     let program_state = &mut global_storage.lock().unwrap();
@@ -372,6 +393,7 @@ async fn main() -> io::Result<()> {
             .service(increment_product)
             .service(decrement_product)
             .service(search_for_products)
+            .service(delete_product_by_id)
             .service(web::resource("/ws").route(web::get().to(ws_index)))
             .service(fs::Files::new("/", "./static/")
             .index_file("index.html"))
