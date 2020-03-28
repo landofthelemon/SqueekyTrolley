@@ -19,6 +19,11 @@ use std::io;
 use actix_files as fs;
 use actix_web_actors::ws;
 use std::clone::Clone;
+use std::io::Write;
+
+
+use actix_multipart::Multipart;
+use futures::StreamExt;
 
 use std::cmp;
 
@@ -285,6 +290,35 @@ impl LevenshteinDistance {
     }
 }
 
+#[post("/api/v1/products/{id}/images")]
+async fn upload_file(path_params: web::Path<IdQuery>, mut payload: Multipart) -> Result<HttpResponse, Error> {
+    // iterate over multipart stream
+    while let Some(item) = payload.next().await {
+        let mut field = item?;
+        let content_type = field.content_disposition().unwrap();
+        let filename = content_type.get_filename().unwrap();
+        let folder = format!("data/{}", &path_params.id);
+        match std::fs::create_dir_all(&folder) {
+            Ok(_) => {},
+            Err(x) => {
+                panic!(x)
+            }
+        };
+        let filepath = format!("{}/{}", &folder, &Uuid::new_v4().to_string());
+        // File::create is blocking operation, use threadpool
+        let mut f = web::block(|| std::fs::File::create(filepath))
+            .await
+            .unwrap();
+        // Field in turn is stream of *Bytes* object
+        while let Some(chunk) = field.next().await {
+            let data = chunk.unwrap();
+            // filesystem operations are blocking, we have to use threadpool
+            f = web::block(move || f.write_all(&data).map(|_| f)).await?;
+        }
+    }
+    Ok(HttpResponse::Ok().into())
+}
+
 #[get("/api/v1/products/search/{search}")]
 async fn search_for_products(global_storage: web::Data<Arc<Mutex<ProgramState>>>, path_params: web::Path<SearchQuery>) -> impl Responder {
     let program_state = &mut global_storage.lock().unwrap();
@@ -292,6 +326,9 @@ async fn search_for_products(global_storage: web::Data<Arc<Mutex<ProgramState>>>
     let mut results: Vec<LevenshteinDistance> = Vec::new();
     let search_term = &path_params.search.to_lowercase();
     for product in products.into_iter() {
+        if product.deleted {
+            continue;
+        }
         let product_name = &product.name.to_lowercase();
         if search_term == product_name {
             results.push(LevenshteinDistance::new(product.id.clone(), product.name.clone(), 0));
@@ -394,6 +431,7 @@ async fn main() -> io::Result<()> {
             .service(decrement_product)
             .service(search_for_products)
             .service(delete_product_by_id)
+            .service(upload_file)
             .service(web::resource("/ws").route(web::get().to(ws_index)))
             .service(fs::Files::new("/", "./static/")
             .index_file("index.html"))
