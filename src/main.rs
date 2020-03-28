@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 use csv::{ReaderBuilder};
 use serde::{Deserialize};
-use actix_web::{post, get, put, web, App, Error, middleware, HttpRequest, HttpResponse, HttpServer, Responder};
+use actix_web::{post, get, put, delete, web, App, Error, middleware, HttpRequest, HttpResponse, HttpServer, Responder};
 use std::sync::{Arc, Mutex};
 use std::io;
 use actix_files as fs;
@@ -91,7 +91,7 @@ impl Product {
         self.version += 1;
     }
     pub fn update_product(&mut self, updated_product: UpdatedProduct) -> Result<Vec<String>, &'static str> {
-        if (self.deleted) {
+        if self.deleted {
             return Err("Product deleted");
         }
         let version = match updated_product.version {
